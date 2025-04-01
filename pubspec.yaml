@@ -1,0 +1,28 @@
+name: genai_flutter
+description: A Flutter plugin for local generative AI inference with RAG capabilities
+version: 0.1.0
+repository: https://github.com/DevMaan707/genai_flutter
+
+environment:
+  sdk: ">=2.17.0 <4.0.0"
+  flutter: ">=2.5.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path_provider: ^2.1.1
+  dio: ^5.3.3
+  path: ^1.8.3
+  sqflite: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.genai.flutter
+        pluginClass: GenaiFlutterPlugin
