@@ -22,7 +22,7 @@ rootProject.allprojects {
 apply plugin: 'com.android.library'
 
 android {
-    compileSdkVersion 33
+    compileSdkVersion 34
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -32,32 +32,41 @@ android {
     defaultConfig {
         minSdkVersion 21
 
-        externalNativeBuild {
+         externalNativeBuild {
             cmake {
-                cppFlags "-std=c++17 -fexceptions"
-                arguments "-DANDROID_STL=c++_shared"
-            }
-        }
-    }
-
-    externalNativeBuild {
-            cmake {
-                cppFlags "-std=c++17 -fexceptions"
                 arguments "-DANDROID_STL=c++_shared",
-                          "-DANDROID_PLATFORM=android-21",
-                          "-DCMAKE_ANDROID_NDK=${android.ndkDirectory}"  // Add this line
+                         "-DANDROID_TOOLCHAIN=clang",
+                         "-DANDROID_PLATFORM=android-21",
+                         "-DCMAKE_ANDROID_NDK_TOOLCHAIN_VERSION=clang"
+                cppFlags "-std=c++17", "-fexceptions"
             }
         }
 
-        // Add this section for NDK compatibility
         ndk {
-            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+            abiFilters 'arm64-v8a'
+        }
+    }
+ndkVersion "25.1.8937393"
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+            version "3.22.1"
         }
     }
 
-    // Make sure NDK is specified
-    ndkVersion "23"  // Use an appropriate version
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    ndkVersion "25.1.8937393"
+    namespace 'com.genai.flutter'
+}
+
 dependencies {
-    implementation 'androidx.annotation:annotation:1.5.0'
-    implementation 'androidx.sqlite:sqlite:2.3.1'
+ implementation 'androidx.sqlite:sqlite:2.4.0'
+    implementation 'androidx.sqlite:sqlite-framework:2.4.0'
+    implementation 'androidx.annotation:annotation:1.7.1'
 }

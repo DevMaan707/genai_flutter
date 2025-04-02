@@ -1,8 +1,9 @@
+#include <stdint.h>
+#include <android/log.h>
 #include "genai_bridge.h"
-#include "ggml/src/ggml.h"
+#include "ggml/include/ggml.h"
 #include "embedding_model.h"
 #include "vector_db.h"
-#include <android/log.h>
 #include <string>
 #include <vector>
 #include <algorithm>

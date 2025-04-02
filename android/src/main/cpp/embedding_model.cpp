@@ -1,5 +1,6 @@
-#include "embedding_model.h"
+#include <stdint.h>
 #include <android/log.h>
+#include "embedding_model.h"
 #include <cmath>
 #include <algorithm>
 

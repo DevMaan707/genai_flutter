@@ -1,10 +1,12 @@
-#ifndef VECTOR_DB_H
-#define VECTOR_DB_H
+#ifndef GENAI_VECTOR_DB_H
+#define GENAI_VECTOR_DB_H
 
+#include <stdint.h>
 #include <string>
 #include <vector>
 #include <mutex>
 #include <sqlite3.h>
+#include <android/log.h>
 
 // Document match structure for search results
 struct DocumentMatch {
@@ -32,20 +34,16 @@ public:
     VectorDB(const std::string& db_name, int embedding_dim);
     ~VectorDB();
 
-    // Check if database initialized correctly
-    bool isInitialized() const { return initialized; }
-
-    // Add a document with its embedding to the database
+    // Core operations
     bool addDocument(const std::string& doc_id, const std::string& content, const std::vector<float>& embedding);
-
-    // Find similar documents using vector similarity search
     std::vector<DocumentMatch> findSimilarDocuments(const std::vector<float>& query_embedding, int top_k);
-
-    // Delete a document from the database
     bool deleteDocument(const std::string& doc_id);
-
-    // Get total document count
     int getDocumentCount();
+    bool clearDatabase();
+    void compactDatabase();
+
+    // Status check
+    bool isInitialized() const;
 };
 
-#endif // VECTOR_DB_H
+#endif // VECTOR

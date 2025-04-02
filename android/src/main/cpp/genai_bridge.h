@@ -1,14 +1,13 @@
 #ifndef GENAI_BRIDGE_H
 #define GENAI_BRIDGE_H
 
+#include <stdint.h>
 #include <jni.h>
+#include <android/log.h>
 #include <string>
 #include <vector>
 #include <map>
 #include <mutex>
-#include <memory>
-#include "embedding_model.h"
-#include "vector_db.h"
 
 // Forward declarations for GGML types
 struct ggml_context;

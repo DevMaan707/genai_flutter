@@ -1,10 +1,11 @@
-#ifndef EMBEDDING_MODEL_H
-#define EMBEDDING_MODEL_H
+#ifndef GENAI_EMBEDDING_MODEL_H
+#define GENAI_EMBEDDING_MODEL_H
 
+#include <stdint.h>
 #include <string>
 #include <vector>
 #include <mutex>
-
+#include <android/log.h>
 // MobileBERT embedding model implementation
 class EmbeddingModel {
 private:

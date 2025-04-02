@@ -1,9 +1,13 @@
-#include "vector_db.h"
+#include "sqlite_wrapper.h"
+#include <stdint.h>
 #include <android/log.h>
+#include "vector_db.h"
 #include <cmath>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define LOG_TAG "VectorDB"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -14,9 +18,15 @@ VectorDB::VectorDB(const std::string& db_name, int embedding_dim)
 
     LOGI("Initializing vector database: %s, dim: %d", db_name.c_str(), embedding_dim);
 
-    // Use the database name to create a path in the app's data directory
-    std::string app_package = "com.genai.flutter";
-        db_path = "/data/data/" +app_package + "/databases/" + db_name + ".db";
+    // Use Android's app-specific directory
+    std::string app_data_dir = "/data/data/com.example.genai_flutter_example/databases/";
+
+    // Create directories if they don't exist
+    mkdir(app_data_dir.c_str(), 0755);
+
+    db_path = app_data_dir + db_name + ".db";
+
+    LOGI("Database path: %s", db_path.c_str());
 
     // Open database connection
     int rc = sqlite3_open(db_path.c_str(), &db);
@@ -38,13 +48,10 @@ VectorDB::VectorDB(const std::string& db_name, int embedding_dim)
 }
 
 VectorDB::~VectorDB() {
-    std::lock_guard<std::mutex> lock(mtx);
-
     if (db) {
         sqlite3_close(db);
         db = nullptr;
     }
-
     LOGI("Vector database resources released");
 }
 
@@ -54,33 +61,16 @@ bool VectorDB::createTables() {
     if (!db) return false;
 
     const char* create_tables_sql = R"(
-        -- Documents table
+        -- Documents table with embeddings
         CREATE TABLE IF NOT EXISTS documents (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             embedding BLOB NOT NULL
         );
 
-        -- Create a virtual table for full-text search
-        CREATE VIRTUAL TABLE IF NOT EXISTS fts_documents USING fts5(
-            content,
-            content='documents',
-            content_rowid='rowid'
-        );
-
-        -- Create triggers to keep FTS in sync with the documents table
-        CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
-            INSERT INTO fts_documents(rowid, content) VALUES (new.rowid, new.content);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
-            INSERT INTO fts_documents(fts_documents, rowid, content) VALUES('delete', old.rowid, old.content);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
-            INSERT INTO fts_documents(fts_documents, rowid, content) VALUES('delete', old.rowid, old.content);
-            INSERT INTO fts_documents(rowid, content) VALUES (new.rowid, new.content);
-        END;
+        -- Create indices for faster retrieval
+        CREATE INDEX IF NOT EXISTS idx_documents_id ON documents(id);
+        CREATE INDEX IF NOT EXISTS idx_documents_content ON documents(content);
     )";
 
     char* error_msg = nullptr;
@@ -97,7 +87,7 @@ bool VectorDB::createTables() {
 
 std::string VectorDB::serializeEmbedding(const std::vector<float>& embedding) {
     std::ostringstream oss;
-    oss << std::setprecision(9);
+    oss << std::fixed << std::setprecision(6);
 
     for (size_t i = 0; i < embedding.size(); ++i) {
         if (i > 0) oss << ",";
@@ -113,14 +103,18 @@ std::vector<float> VectorDB::deserializeEmbedding(const std::string& data) {
     std::string token;
 
     while (std::getline(iss, token, ',')) {
-        embedding.push_back(std::stof(token));
+        try {
+            embedding.push_back(std::stof(token));
+        } catch (const std::exception& e) {
+            LOGE("Error parsing embedding value: %s", e.what());
+        }
     }
 
     return embedding;
 }
 
 float VectorDB::computeCosineSimilarity(const std::vector<float>& a, const std::vector<float>& b) {
-    if (a.empty() || b.empty() || a.size() != b.size()) {
+    if (a.size() != b.size() || a.empty()) {
         return 0.0f;
     }
 
@@ -144,20 +138,18 @@ float VectorDB::computeCosineSimilarity(const std::vector<float>& a, const std::
 bool VectorDB::addDocument(const std::string& doc_id, const std::string& content, const std::vector<float>& embedding) {
     std::lock_guard<std::mutex> lock(mtx);
 
-    if (!db || !initialized) return false;
-
-    // Check if embedding has the correct dimension
-    if ((int)embedding.size() != embedding_dimension) {
-        LOGE("Embedding dimension mismatch: expected %d, got %zu", embedding_dimension, embedding.size());
+    if (!db || !initialized) {
+        LOGE("Database not initialized");
         return false;
     }
 
-    // Serialize the embedding
-    std::string serialized_embedding = serializeEmbedding(embedding);
+    if (static_cast<int>(embedding.size()) != embedding_dimension){
+        LOGE("Invalid embedding dimension: expected %d, got %zu", embedding_dimension, embedding.size());
+        return false;
+    }
 
-    // Prepare the SQL statement
-    sqlite3_stmt* stmt;
     const char* sql = "INSERT OR REPLACE INTO documents (id, content, embedding) VALUES (?, ?, ?)";
+    sqlite3_stmt* stmt;
 
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
@@ -165,12 +157,12 @@ bool VectorDB::addDocument(const std::string& doc_id, const std::string& content
         return false;
     }
 
-    // Bind the parameters
+    std::string serialized_embedding = serializeEmbedding(embedding);
+
     sqlite3_bind_text(stmt, 1, doc_id.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, content.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, serialized_embedding.c_str(), -1, SQLITE_STATIC);
 
-    // Execute the statement
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
@@ -179,27 +171,29 @@ bool VectorDB::addDocument(const std::string& doc_id, const std::string& content
         return false;
     }
 
+    LOGI("Document added successfully: %s", doc_id.c_str());
     return true;
 }
 
 std::vector<DocumentMatch> VectorDB::findSimilarDocuments(const std::vector<float>& query_embedding, int top_k) {
     std::lock_guard<std::mutex> lock(mtx);
-
     std::vector<DocumentMatch> results;
 
-    if (!db || !initialized) return results;
+    if (!db || !initialized) {
+        LOGE("Database not initialized");
+        return results;
+    }
 
-    // Check if embedding has the correct dimension
-    if ((int)query_embedding.size() != embedding_dimension) {
-        LOGE("Query embedding dimension mismatch: expected %d, got %zu",
+    if (static_cast<int>(query_embedding.size()) != embedding_dimension) {
+        LOGE("Invalid query embedding dimension: expected %d, got %zu",
              embedding_dimension, query_embedding.size());
         return results;
     }
 
-    // Get all documents and compute similarity scores
+    // Get all documents
     const char* sql = "SELECT id, content, embedding FROM documents";
-
     sqlite3_stmt* stmt;
+
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         LOGE("Failed to prepare statement: %s", sqlite3_errmsg(db));
@@ -208,45 +202,52 @@ std::vector<DocumentMatch> VectorDB::findSimilarDocuments(const std::vector<floa
 
     std::vector<DocumentMatch> matches;
 
+    // Process each document
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char* doc_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         const char* content = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         const char* embedding_str = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
 
         std::vector<float> doc_embedding = deserializeEmbedding(embedding_str);
-        float similarity = computeCosineSimilarity(query_embedding, doc_embedding);
 
-        DocumentMatch match;
-        match.id = doc_id;
-        match.content = content;
-        match.score = similarity;
+        if (static_cast<int>(doc_embedding.size()) == embedding_dimension) {
+            float similarity = computeCosineSimilarity(query_embedding, doc_embedding);
 
-        matches.push_back(match);
+            DocumentMatch match;
+            match.id = doc_id;
+            match.content = content;
+            match.score = similarity;
+
+            matches.push_back(match);
+        }
     }
 
     sqlite3_finalize(stmt);
 
-    // Sort matches by similarity score (descending)
+    // Sort by similarity score (descending)
     std::sort(matches.begin(), matches.end(),
               [](const DocumentMatch& a, const DocumentMatch& b) {
                   return a.score > b.score;
               });
 
     // Return top_k results
-    int count = std::min(top_k, (int)matches.size());
+    size_t count = std::min(static_cast<size_t>(top_k), matches.size());
     results.assign(matches.begin(), matches.begin() + count);
 
+    LOGI("Found %zu similar documents", count);
     return results;
 }
 
 bool VectorDB::deleteDocument(const std::string& doc_id) {
     std::lock_guard<std::mutex> lock(mtx);
 
-    if (!db || !initialized) return false;
+    if (!db || !initialized) {
+        LOGE("Database not initialized");
+        return false;
+    }
 
-    // Prepare the SQL statement
-    sqlite3_stmt* stmt;
     const char* sql = "DELETE FROM documents WHERE id = ?";
+    sqlite3_stmt* stmt;
 
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
@@ -254,10 +255,8 @@ bool VectorDB::deleteDocument(const std::string& doc_id) {
         return false;
     }
 
-    // Bind the parameters
     sqlite3_bind_text(stmt, 1, doc_id.c_str(), -1, SQLITE_STATIC);
 
-    // Execute the statement
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
@@ -266,17 +265,20 @@ bool VectorDB::deleteDocument(const std::string& doc_id) {
         return false;
     }
 
+    LOGI("Document deleted successfully: %s", doc_id.c_str());
     return true;
 }
 
 int VectorDB::getDocumentCount() {
     std::lock_guard<std::mutex> lock(mtx);
 
-    if (!db || !initialized) return 0;
+    if (!db || !initialized) {
+        LOGE("Database not initialized");
+        return 0;
+    }
 
-    // Prepare the SQL statement
-    sqlite3_stmt* stmt;
     const char* sql = "SELECT COUNT(*) FROM documents";
+    sqlite3_stmt* stmt;
 
     int count = 0;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
@@ -287,4 +289,53 @@ int VectorDB::getDocumentCount() {
 
     sqlite3_finalize(stmt);
     return count;
+}
+
+bool VectorDB::clearDatabase() {
+    std::lock_guard<std::mutex> lock(mtx);
+
+    if (!db || !initialized) {
+        LOGE("Database not initialized");
+        return false;
+    }
+
+    const char* sql = "DELETE FROM documents";
+    char* error_msg = nullptr;
+
+    int rc = sqlite3_exec(db, sql, nullptr, nullptr, &error_msg);
+
+    if (rc != SQLITE_OK) {
+        LOGE("Failed to clear database: %s", error_msg);
+        sqlite3_free(error_msg);
+        return false;
+    }
+
+    LOGI("Database cleared successfully");
+    return true;
+}
+
+bool VectorDB::isInitialized() const {
+    return initialized;
+}
+
+void VectorDB::compactDatabase() {
+    std::lock_guard<std::mutex> lock(mtx);
+
+    if (!db || !initialized) {
+        LOGE("Database not initialized");
+        return;
+    }
+
+    const char* sql = "VACUUM";
+    char* error_msg = nullptr;
+
+    int rc = sqlite3_exec(db, sql, nullptr, nullptr, &error_msg);
+
+    if (rc != SQLITE_OK) {
+        LOGE("Failed to compact database: %s", error_msg);
+        sqlite3_free(error_msg);
+        return;
+    }
+
+    LOGI("Database compacted successfully");
 }
